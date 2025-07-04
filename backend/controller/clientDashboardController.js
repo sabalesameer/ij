@@ -10,10 +10,17 @@ exports.createUserUnderClient = async (req, res) => {
   const { role, username, password, email } = req.body;
 
   try {
+    // Validate input
     if (!role || !username || !password || !email) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
+    const validRoles = ["client_user", "recruiter", "vendor", "hr"];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ message: `Invalid role. Allowed roles: ${validRoles.join(", ")}` });
+    }
+
+    // Find client
     const client = await Client.findById(clientId);
     if (!client) {
       return res.status(404).json({ message: "Client not found" });
@@ -24,16 +31,16 @@ exports.createUserUnderClient = async (req, res) => {
       return res.status(400).json({ message: "Client has no active subscription" });
     }
 
-    const planDetails = await SubscriptionModel.findOne({ plan_type: subscription.plan_type.toLowerCase() });
+    // Fetch subscription plan details
+    const planDetails = await SubscriptionModel.findOne({
+      plan_type: subscription.plan_type.toLowerCase()
+    });
+
     if (!planDetails) {
-      return res.status(500).json({ message: "Subscription plan details not found" });
+      return res.status(500).json({ message: "Subscription plan not found" });
     }
 
-    const validRoles = ["client_user", "recruiter", "vendor", "hr"];
-    if (!validRoles.includes(role)) {
-      return res.status(400).json({ message: `Invalid role. Allowed roles are: ${validRoles.join(", ")}` });
-    }
-
+    // Map role → limit field in subscription plan
     const roleKeyMap = {
       client_user: "client_user_limit",
       recruiter: "recruiter_user_limit",
@@ -41,39 +48,33 @@ exports.createUserUnderClient = async (req, res) => {
       hr: "HR_user_limit"
     };
 
-    const currentKeyMap = {
-      client_user: "current_client_users",
-      recruiter: "current_recruiter_users",
-      vendor: "current_vendor_users",
-      hr: "current_hr_users"
-    };
+    const limit = planDetails[roleKeyMap[role]] || 0;
 
-    const roleKey = roleKeyMap[role];
-    const currentKey = currentKeyMap[role];
+    // Count how many users already exist in DB under this client and role
+    const existingCount = await UserAccount.countDocuments({
+      client: clientId,
+      role: role
+    });
 
-    const allowed = planDetails[roleKey] || 0;
-    const current = subscription[currentKey] || 0;
-
-    console.log(`Checking role: ${role}, Allowed: ${allowed}, Current: ${current}`);
-
-    if (current >= allowed) {
+    if (existingCount >= limit) {
       return res.status(403).json({
-        message: `Cannot create more ${role} users. Limit of ${allowed} reached.`,
-        currentUsers: current,
-        limit: allowed
+        message: `Cannot create more '${role}' users. Limit of ${limit} reached.`,
+        currentUsers: existingCount,
+        limit
       });
     }
 
+    // Ensure username/email is unique
     const existingUser = await UserAccount.findOne({
-      $or: [
-        { username },
-        { email }
-      ]
+      $or: [{ username }, { email }]
     });
     if (existingUser) {
-      return res.status(409).json({ message: "Username or email already exists. Please choose a different one." });
+      return res.status(409).json({
+        message: "Username or email already exists."
+      });
     }
 
+    // Create user
     const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = new UserAccount({
       client: clientId,
@@ -82,11 +83,13 @@ exports.createUserUnderClient = async (req, res) => {
       password: hashedPassword,
       email
     });
+
     await newUser.save();
 
+    // Send email
     await sendEmail({
       to: email,
-      subject: "Your Account Login - JobSakura",
+      subject: "Your JobSakura Login Credentials",
       html: `
         <p>Hello,</p>
         <p>Your JobSakura login credentials:</p>
@@ -94,22 +97,18 @@ exports.createUserUnderClient = async (req, res) => {
           <li><b>Username:</b> ${username}</li>
           <li><b>Password:</b> ${password}</li>
         </ul>
-        <p>Please change your password after first login.</p>
+        <p>Please change your password after your first login.</p>
       `
     });
 
-    subscription[currentKey] = current + 1;
-    client.markModified("subscription");
-    await client.save();
-
-    res.status(201).json({
+    return res.status(201).json({
       message: `${role} user created successfully.`,
-      currentUsers: subscription[currentKey],
-      limit: allowed
+      currentUsers: existingCount + 1,
+      limit
     });
 
   } catch (err) {
-    console.error("User creation error:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("Error creating user:", err);
+    return res.status(500).json({ message: "Server error", error: err.message });
   }
 };
