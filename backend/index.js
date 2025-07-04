@@ -14,7 +14,9 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/clients", require("./routes/clientRoutes"));
-app.use("/api/dashboard", require("./routes/clientDashboardRoutes")); // Adjust base path as needed
+app.use("/api/dashboard", require("./routes/clientDashboardRoutes")); 
+app.use("/api/dashboard", require("./routes/jobRoutes"));
+
 
 
 const PORT = process.env.PORT || 3000;

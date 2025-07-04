@@ -112,3 +112,54 @@ exports.createUserUnderClient = async (req, res) => {
     return res.status(500).json({ message: "Server error", error: err.message });
   }
 };
+
+exports.assignTeamLeadRecruiter = async (req, res) => {
+  const { clientId, recruiterId } = req.params;
+
+  try {
+    // Ensure recruiter exists and belongs to this client
+    const recruiter = await UserAccount.findOne({
+      _id: recruiterId,
+      client: clientId,
+      role: "recruiter"
+    });
+
+    if (!recruiter) {
+      return res.status(404).json({ message: "Recruiter not found for this client." });
+    }
+
+    // Set isTeamLead = false for all other recruiters under this client
+    await UserAccount.updateMany(
+      { client: clientId, role: "recruiter" },
+      { $set: { isTeamLead: false } }
+    );
+
+    // Set isTeamLead = true for selected recruiter
+    recruiter.isTeamLead = true;
+    await recruiter.save();
+
+    res.status(200).json({ message: "Team Lead assigned successfully." });
+  } catch (error) {
+    console.error("Assign team lead error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+exports.getClientUsers = async (req, res) => {
+  const { clientId } = req.params;
+
+  try {
+    // ✅ Query users linked to the client
+    const users = await UserAccount.find({ client: clientId })  .populate("client", "name"); // shows client name only
+
+    // ❗ Handle empty result
+    if (!users || users.length === 0) {
+      return res.status(404).json({ message: "No users found for this client." });
+    }
+
+    // ✅ Return users
+    res.status(200).json(users);
+  } catch (error) {
+    console.error("Get client users error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
